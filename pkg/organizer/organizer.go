@@ -484,6 +484,9 @@ func (o *Organizer) Run() Result {
 		}
 	}
 
+	// Final pass to remove any empty folders left in organized output.
+	o.pruneEmptyDirs(o.organizedDir, true)
+
 	// Save new state
 	o.db = newState
 	if err := o.saveDB(); err != nil {
@@ -503,6 +506,37 @@ func (o *Organizer) cleanEmptyDirs(dir string) {
 		os.Remove(dir)
 		dir = filepath.Dir(dir)
 	}
+}
+
+// pruneEmptyDirs recursively deletes empty directories under the organized root.
+// It keeps the root directory itself.
+func (o *Organizer) pruneEmptyDirs(dir string, isRoot bool) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+
+	isEmpty := true
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			isEmpty = false
+			continue
+		}
+
+		childPath := filepath.Join(dir, entry.Name())
+		if !o.pruneEmptyDirs(childPath, false) {
+			isEmpty = false
+		}
+	}
+
+	if isRoot || !isEmpty {
+		return isEmpty
+	}
+
+	if err := os.Remove(dir); err != nil {
+		return false
+	}
+	return true
 }
 
 // fileExists checks if a file exists.

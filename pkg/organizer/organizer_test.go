@@ -246,3 +246,61 @@ func TestRun_UsesCWDForRelativeOrganizedDir(t *testing.T) {
 		t.Fatalf("unexpected stat error for config directory target: %v", err)
 	}
 }
+
+func TestRun_PrunesOrphanEmptyFolders(t *testing.T) {
+	baseDir := t.TempDir()
+
+	libraryDir := filepath.Join(baseDir, "library")
+	organizedDir := filepath.Join(baseDir, "library-organized")
+	cacheDir := filepath.Join(baseDir, "cache")
+
+	if err := os.MkdirAll(libraryDir, 0755); err != nil {
+		t.Fatalf("mkdir library: %v", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("mkdir cache: %v", err)
+	}
+
+	// Create an orphan empty tree that is not tied to organizer DB/tracking cleanup.
+	orphanEmptyDir := filepath.Join(organizedDir, "Series", "Orphan Show (2026)", "Season 01")
+	if err := os.MkdirAll(orphanEmptyDir, 0755); err != nil {
+		t.Fatalf("mkdir orphan empty dir: %v", err)
+	}
+
+	// Create one tracked source file so Run() performs normal work.
+	relPath := filepath.Join("Some.Movie.2024", "Some.Movie.2024.strm")
+	sourceFullPath := filepath.Join(libraryDir, relPath)
+	if err := os.MkdirAll(filepath.Dir(sourceFullPath), 0755); err != nil {
+		t.Fatalf("mkdir source dir: %v", err)
+	}
+	if err := os.WriteFile(sourceFullPath, []byte("https://example.test/stream"), 0644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	trackingPath := filepath.Join(cacheDir, "file_tracking.json")
+	tracking := map[string]TrackingEntry{
+		relPath: {Link: "https://real-debrid.com/d/ABC123", DownloadURL: "https://example.test/stream"},
+	}
+	trackingBytes, err := json.Marshal(tracking)
+	if err != nil {
+		t.Fatalf("marshal tracking: %v", err)
+	}
+	if err := os.WriteFile(trackingPath, trackingBytes, 0644); err != nil {
+		t.Fatalf("write tracking: %v", err)
+	}
+
+	org := New(Config{
+		BaseDir:      baseDir,
+		OrganizedDir: organizedDir,
+		OutputDir:    libraryDir,
+		TrackingFile: trackingPath,
+		CacheDir:     cacheDir,
+		Logger:       zerolog.Nop(),
+	})
+
+	_ = org.Run()
+
+	if _, err := os.Stat(orphanEmptyDir); !os.IsNotExist(err) {
+		t.Fatalf("expected orphan empty directory to be pruned, got err=%v", err)
+	}
+}
