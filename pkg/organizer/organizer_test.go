@@ -25,7 +25,7 @@ func TestRun_RemovesOrganizedWhenSourceMissing(t *testing.T) {
 		t.Fatalf("mkdir cache: %v", err)
 	}
 
-	relPath := filepath.Join("Movies", "Example (2024)", "Example (2024) [ABC123].strm")
+	relPath := filepath.Join("Movies", "Example (2024)", "Example (2024).strm")
 	destFullPath := filepath.Join(organizedDir, relPath)
 	if err := os.MkdirAll(filepath.Dir(destFullPath), 0755); err != nil {
 		t.Fatalf("mkdir dest dir: %v", err)
@@ -95,7 +95,7 @@ func TestRun_UpdatesOrganizedWhenDownloadURLChanges(t *testing.T) {
 		t.Fatalf("mkdir cache: %v", err)
 	}
 
-	relPath := filepath.Join("Movies", "Example (2024)", "Example (2024) [ABC123].strm")
+	relPath := filepath.Join("Movies", "Example (2024)", "Example (2024).strm")
 	sourceFullPath := filepath.Join(libraryDir, relPath)
 	destFullPath := filepath.Join(organizedDir, relPath)
 
@@ -337,7 +337,7 @@ func TestGetContentTypeAndPath_StripsSourcePrefixForMovie(t *testing.T) {
 		t.Fatalf("expected movie type, got %s", contentType)
 	}
 
-	expected := filepath.Join("Movies", "Generic Movie (2026)", "Generic Movie (2026) [ABCDEF123456].strm")
+	expected := filepath.Join("Movies", "Generic Movie (2026)", "Generic Movie (2026).strm")
 	if dest != expected {
 		t.Fatalf("unexpected destination path: got %q want %q", dest, expected)
 	}

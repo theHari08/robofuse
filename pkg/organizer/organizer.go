@@ -555,17 +555,17 @@ func (o *Organizer) getContentTypeAndPath(parsed, parentParsed *ptt.TorrentInfo,
 	}
 
 	// ID suffix
-	idSuffix := ""
-	if rdID != "" {
-		idSuffix = fmt.Sprintf(" [%s]", rdID)
-	}
+	// idSuffix := ""
+	// if rdID != "" {
+	// 	idSuffix = fmt.Sprintf(" [%s]", rdID)
+	// }
 
 	// Extension
 	ext := filepath.Ext(filename)
 
 	var destPath string
 	if finalType == "movie" {
-		finalFilename := cleanFilename(fmt.Sprintf("%s%s%s", formattedTitle, idSuffix, ext))
+		finalFilename := cleanFilename(fmt.Sprintf("%s%s", formattedTitle, ext))
 		destPath = filepath.Join("Movies", formattedTitle, finalFilename)
 	} else {
 		// Series or Anime
@@ -584,16 +584,16 @@ func (o *Organizer) getContentTypeAndPath(parsed, parentParsed *ptt.TorrentInfo,
 			} else {
 				epStr = fmt.Sprintf("E%02d", episode[0])
 			}
-			finalFilename = cleanFilename(fmt.Sprintf("%s %s%s%s", title, epStr, idSuffix, ext))
+			finalFilename = cleanFilename(fmt.Sprintf("%s %s%s", title, epStr, ext))
 		} else {
 			partName := cleanSeriesTitle(fTitle)
 			if partName == "" {
 				partName = "Unknown"
 			}
 			if strings.EqualFold(partName, title) {
-				finalFilename = cleanFilename(fmt.Sprintf("%s%s%s", title, idSuffix, ext))
+				finalFilename = cleanFilename(fmt.Sprintf("%s%s", title, ext))
 			} else {
-				finalFilename = cleanFilename(fmt.Sprintf("%s - %s%s%s", title, partName, idSuffix, ext))
+				finalFilename = cleanFilename(fmt.Sprintf("%s - %s%s", title, partName, ext))
 			}
 		}
 
