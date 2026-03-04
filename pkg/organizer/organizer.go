@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"unicode"
 
 	ptt "github.com/itsrenoria/ptt-go"
 	"github.com/rs/zerolog"
@@ -160,10 +162,240 @@ func getRDIDFromLink(link string) string {
 }
 
 var illegalCharsRegex = regexp.MustCompile(`[<>:"/\\|?*]`)
+var folderYearRegex = regexp.MustCompile(`^(.*)\((\d{4})\)$`)
+var trailingFinalRegex = regexp.MustCompile(`(?i)\s+final$`)
 
 // cleanFilename removes illegal filesystem characters.
 func cleanFilename(name string) string {
 	return illegalCharsRegex.ReplaceAllString(name, "")
+}
+
+func normalizeWhitespace(s string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
+}
+
+// cleanSeriesTitle removes common trailing release-group noise for series/anime titles.
+func cleanSeriesTitle(title string) string {
+	normalized := normalizeWhitespace(title)
+	if normalized == "" {
+		return normalized
+	}
+
+	strippedGroup := false
+	if idx := strings.Index(normalized, ".-"); idx >= 0 {
+		normalized = strings.TrimSpace(normalized[:idx])
+		strippedGroup = true
+	}
+
+	if strippedGroup {
+		normalized = strings.TrimSpace(trailingFinalRegex.ReplaceAllString(normalized, ""))
+	}
+
+	return normalizeWhitespace(normalized)
+}
+
+func normalizeTitleKey(title string) string {
+	title = strings.ToLower(strings.TrimSpace(title))
+	if title == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	sep := false
+	for _, r := range title {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			sep = false
+			continue
+		}
+		if !sep {
+			b.WriteRune(' ')
+			sep = true
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func splitFolderTitleYear(folder string) (string, int) {
+	folder = strings.TrimSpace(folder)
+	match := folderYearRegex.FindStringSubmatch(folder)
+	if len(match) != 3 {
+		return folder, 0
+	}
+
+	year, err := strconv.Atoi(match[2])
+	if err != nil {
+		return strings.TrimSpace(match[1]), 0
+	}
+	return strings.TrimSpace(match[1]), year
+}
+
+func normalizePrefixToken(token string) string {
+	return strings.ToLower(strings.Trim(token, "[](){}<>.,-_/\\"))
+}
+
+func isLikelyTLD(token string) bool {
+	if token == "" {
+		return false
+	}
+
+	// Dynamic TLD heuristic:
+	// - normal TLD labels are alphabetic, usually 2..24 chars
+	// - support punycode prefix (xn--)
+	if strings.HasPrefix(token, "xn--") {
+		rest := token[4:]
+		if len(rest) < 2 || len(rest) > 24 {
+			return false
+		}
+		for _, r := range rest {
+			if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-') {
+				return false
+			}
+		}
+		return true
+	}
+
+	if len(token) < 2 || len(token) > 24 {
+		return false
+	}
+	for _, r := range token {
+		if !unicode.IsLetter(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func isLikelyDomainLabel(token string) bool {
+	if len(token) < 2 {
+		return false
+	}
+	hasLetter := false
+	for _, r := range token {
+		switch {
+		case unicode.IsLetter(r):
+			hasLetter = true
+		case unicode.IsDigit(r), r == '-':
+		default:
+			return false
+		}
+	}
+	return hasLetter
+}
+
+func hasMixedAlphaNumeric(token string) bool {
+	hasLetter := false
+	hasDigit := false
+	for _, r := range token {
+		if unicode.IsLetter(r) {
+			hasLetter = true
+		} else if unicode.IsDigit(r) {
+			hasDigit = true
+		}
+	}
+	return hasLetter && hasDigit
+}
+
+func isLikelyYear(token string) bool {
+	if len(token) != 4 {
+		return false
+	}
+	for _, r := range token {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func isLikelyTagToken(rawToken, normalized string) bool {
+	if normalized == "" {
+		return false
+	}
+	if rawToken != strings.ToLower(rawToken) {
+		return false
+	}
+	for _, r := range normalized {
+		if !unicode.IsLetter(r) {
+			return false
+		}
+	}
+	return len(normalized) <= 5
+}
+
+// stripSourcePrefix removes leading source-site tokens from parsed titles,
+// e.g. "www 1Source gs Example Title" -> "Example Title".
+func stripSourcePrefix(title string) string {
+	fields := strings.Fields(strings.TrimSpace(title))
+	if len(fields) == 0 {
+		return ""
+	}
+	if !strings.EqualFold(fields[0], "www") {
+		return strings.Join(fields, " ")
+	}
+
+	i := 0
+	sawSourceMarker := false
+	domainPairStripped := false
+
+	for i < len(fields) {
+		curr := normalizePrefixToken(fields[i])
+		next := ""
+		if i+1 < len(fields) {
+			next = normalizePrefixToken(fields[i+1])
+		}
+
+		if curr == "" {
+			i++
+			continue
+		}
+
+		// Strip explicit URL marker.
+		if curr == "www" {
+			sawSourceMarker = true
+			i++
+			continue
+		}
+
+		// Strip domain-style prefix pairs like "sourceindex org" or "foo com".
+		// Guard against title phrases like "Bank of ..." by requiring either:
+		// - a longer suffix token (len >= 3), or
+		// - a source-like label token (mixed alnum / hyphenated).
+		if !domainPairStripped && next != "" && isLikelyDomainLabel(curr) && isLikelyTLD(next) &&
+			(len(next) >= 3 || hasMixedAlphaNumeric(curr) || strings.Contains(curr, "-")) {
+			sawSourceMarker = true
+			domainPairStripped = true
+			i += 2
+			continue
+		}
+
+		// Strip domain token forms like "foo.com".
+		if strings.Contains(curr, ".") {
+			sawSourceMarker = true
+			i++
+			continue
+		}
+
+		// Strip source tokens like "1Source", "x265site", etc.
+		if hasMixedAlphaNumeric(curr) && !isLikelyYear(curr) {
+			sawSourceMarker = true
+			i++
+			continue
+		}
+
+		// After source marker, strip short lowercase tags (e.g. "gs", "tag").
+		if sawSourceMarker && isLikelyTagToken(fields[i], curr) {
+			i++
+			continue
+		}
+
+		break
+	}
+
+	if !sawSourceMarker || i >= len(fields) {
+		return strings.Join(fields, " ")
+	}
+	return strings.Join(fields[i:], " ")
 }
 
 // findExistingSeriesFolder checks if a folder for the series already exists.
@@ -174,7 +406,7 @@ func (o *Organizer) findExistingSeriesFolder(baseFolder, title string, year int)
 		return ""
 	}
 
-	normalizedTitle := strings.ToLower(strings.TrimSpace(title))
+	normalizedTitle := normalizeTitleKey(title)
 	targetWithYear := title
 	if year > 0 {
 		targetWithYear = fmt.Sprintf("%s (%d)", title, year)
@@ -190,15 +422,14 @@ func (o *Organizer) findExistingSeriesFolder(baseFolder, title string, year int)
 		}
 	}
 
-	// Check for title match with/without year
+	// Check for normalized title match (case-insensitive and punctuation-insensitive).
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		folderLower := strings.ToLower(entry.Name())
-		if strings.HasPrefix(folderLower, normalizedTitle) {
-			remainder := strings.TrimSpace(strings.TrimPrefix(folderLower, normalizedTitle))
-			if remainder == "" || (strings.HasPrefix(remainder, "(") && strings.HasSuffix(remainder, ")") && len(remainder) == 6) {
+		existingTitle, existingYear := splitFolderTitleYear(entry.Name())
+		if normalizeTitleKey(existingTitle) == normalizedTitle {
+			if year == 0 || existingYear == 0 || existingYear == year {
 				return entry.Name()
 			}
 		}
@@ -210,7 +441,7 @@ func (o *Organizer) findExistingSeriesFolder(baseFolder, title string, year int)
 // getContentTypeAndPath determines content type and destination path.
 func (o *Organizer) getContentTypeAndPath(parsed, parentParsed *ptt.TorrentInfo, filename, rdID string) (string, string) {
 	// Extract info from filename
-	fTitle := parsed.Title
+	fTitle := stripSourcePrefix(parsed.Title)
 	fYear := parsed.Year
 	fSeason := parsed.Seasons
 	fEpisode := parsed.Episodes
@@ -222,7 +453,7 @@ func (o *Organizer) getContentTypeAndPath(parsed, parentParsed *ptt.TorrentInfo,
 	var pSeason, pEpisode []int
 	pAnime := false
 	if parentParsed != nil {
-		pTitle = parentParsed.Title
+		pTitle = stripSourcePrefix(parentParsed.Title)
 		pYear = parentParsed.Year
 		pSeason = parentParsed.Seasons
 		pEpisode = parentParsed.Episodes
@@ -295,6 +526,10 @@ func (o *Organizer) getContentTypeAndPath(parsed, parentParsed *ptt.TorrentInfo,
 		}
 	}
 
+	if finalType == "series" || finalType == "anime" {
+		title = cleanSeriesTitle(title)
+	}
+
 	// Determine base folder
 	var baseFolder string
 	switch finalType {
@@ -351,7 +586,7 @@ func (o *Organizer) getContentTypeAndPath(parsed, parentParsed *ptt.TorrentInfo,
 			}
 			finalFilename = cleanFilename(fmt.Sprintf("%s %s%s%s", title, epStr, idSuffix, ext))
 		} else {
-			partName := fTitle
+			partName := cleanSeriesTitle(fTitle)
 			if partName == "" {
 				partName = "Unknown"
 			}
@@ -458,6 +693,17 @@ func (o *Organizer) Run() Result {
 			o.logger.Error().Err(err).Str("path", relPath).Msg("Failed to organize file")
 			result.Errors++
 			continue
+		}
+
+		// Remove previous destination for the same source if destination changed.
+		if prevEntry, exists := o.db[relPath]; exists && prevEntry.DestPath != destRelPath {
+			oldDestFull := filepath.Join(o.organizedDir, prevEntry.DestPath)
+			if !strings.EqualFold(oldDestFull, destFullPath) && fileExists(oldDestFull) {
+				if err := os.Remove(oldDestFull); err == nil {
+					o.cleanEmptyDirs(filepath.Dir(oldDestFull))
+					result.Deleted++
+				}
+			}
 		}
 
 		newState[relPath] = FileEntry{

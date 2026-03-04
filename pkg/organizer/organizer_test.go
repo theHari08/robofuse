@@ -304,3 +304,41 @@ func TestRun_PrunesOrphanEmptyFolders(t *testing.T) {
 		t.Fatalf("expected orphan empty directory to be pruned, got err=%v", err)
 	}
 }
+
+func TestStripSourcePrefix(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{in: "www 1Source gs Example Title", want: "Example Title"},
+		{in: "www 1Source tag Example of Words", want: "Example of Words"},
+		{in: "www SomeIndex org Sample and Test", want: "Sample and Test"},
+		{in: "www NewSource com Generic Movie", want: "Generic Movie"},
+		{in: "Plain Title", want: "Plain Title"},
+	}
+
+	for _, tc := range tests {
+		got := stripSourcePrefix(tc.in)
+		if got != tc.want {
+			t.Fatalf("stripSourcePrefix(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestGetContentTypeAndPath_StripsSourcePrefixForMovie(t *testing.T) {
+	org := New(Config{
+		BaseDir: t.TempDir(),
+		Logger:  zerolog.Nop(),
+	})
+
+	parsed := org.parser.Parse("www 1Source gs Generic Movie (2026)")
+	contentType, dest := org.getContentTypeAndPath(parsed, nil, "www 1Source gs Generic Movie (2026).strm", "ABCDEF123456")
+	if contentType != "movie" {
+		t.Fatalf("expected movie type, got %s", contentType)
+	}
+
+	expected := filepath.Join("Movies", "Generic Movie (2026)", "Generic Movie (2026) [ABCDEF123456].strm")
+	if dest != expected {
+		t.Fatalf("unexpected destination path: got %q want %q", dest, expected)
+	}
+}
